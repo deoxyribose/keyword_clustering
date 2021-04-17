@@ -1,0 +1,217 @@
+Open Terminal in Neo4j Desktop (under the blue Open drop down menu), and run the following commands
+
+cp /home/folzd/Freelance/urls.csv/urls.csv ./import/
+cp /home/folzd/Freelance/keywords.csv/keywords.csv ./import/
+cp /home/folzd/Freelance/url2keyword.csv/url2keyword.csv ./import/
+
+
+Click on the same Open button, to open Neo4j Browser, and run the following commands
+
+CREATE CONSTRAINT urlIdConstraint ON (url:Url) ASSERT url.id IS UNIQUE
+
+CREATE CONSTRAINT keywordIdConstraint ON (keyword:Keyword) ASSERT keyword.id IS UNIQUE
+
+LOAD CSV WITH HEADERS FROM "file:///urls.csv" AS csvLine
+CREATE (u:Url {id: toInteger(csvLine.id), url: csvLine.url})
+
+LOAD CSV WITH HEADERS FROM "file:///keywords.csv" AS csvLine
+CREATE (keyword:Keyword {id: toInteger(csvLine.id), keyword: csvLine.keyword})
+
+:auto USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM "file:///url2keyword.csv" AS csvLine
+MATCH (keyword:Keyword {id: toInteger(csvLine.keywordId)}), (url:Url {id: toInteger(csvLine.urlId)})
+CREATE (url)-[:SEARCH_RESULT_FOR]->(keyword)
+
+________________________________________________________________________________________________________
+
+Go to the settings for the database (three dots menu next to open) and, under Memory Settings, edit the relevant lines to
+
+dbms.memory.heap.initial_size=3G
+dbms.memory.heap.max_size=6G
+
+dbms.memory.pagecache.size=6G
+
+
+//Under Network connector configuration, uncomment
+
+//dbms.default_listen_address=0.0.0.0
+
+// takes 6 minutes
+
+
+________________________________________________________________________________________________________
+
+// Create relationships between keyword pairs, with a list of Url IDs as a relationship property
+
+CALL apoc.periodic.iterate(
+"MATCH (k1:Keyword) RETURN k1",
+"MATCH (k1)<--(r:Url)-->(k2:Keyword)
+WHERE k1 <> k2
+WITH k1, k2, COLLECT(DISTINCT r.id) AS commonURLs
+WHERE size(commonURLs) > 3  //or whatever you prefer
+MERGE (k1)-[r:ASSOCIATED_WITH]-(k2)
+SET r.urls = commonURLs", 
+{batchSize: 250, parallel: false})
+________________________________________________________________________________________________________
+
+// if creating relationships goes wrong
+
+CALL apoc.periodic.iterate(
+"MATCH (n)-[r:ASSOCIATED_WITH]->() RETURN r",
+"DELETE r",
+{batchSize: 250, parallel: true})
+________________________________________________________________________________________________________
+
+// find groups of three or more keywords that have more than 4 urls in common
+
+MATCH path = (k1:Keyword)-[r1:ASSOCIATED_WITH]->(k2:Keyword)<-[:ASSOCIATED_WITH*1..3]-(k3:Keyword)
+WHERE k1.id = 7442
+WITH nodes(path) as keywords, reduce(intersect = r1.urls, r IN relationships(path) | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+RETURN keywords, commonUrls ORDER BY size(keywords) DESC
+
+
+MATCH (k1:Keyword {id: 7442})-[r1:ASSOCIATED_WITH]-(n:Keyword)
+WITH k1,r1,n,collect(n) as neighbors
+MATCH path = (k1)-[:ASSOCIATED_WITH*1..3]-(n)
+WHERE ALL(k in neighbors WHERE k in nodes(path)) AND apoc.coll.duplicates(nodes(path)) = []
+WITH k1,nodes(path) as keywords, reduce(intersect = r1.urls, r IN relationships(path) | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+RETURN [k in keywords | k.keyword], commonUrls ORDER BY size(keywords) DESC LIMIT 1
+
+// Need an algorithm like this:
+// Find k1
+// Find k2: k1's neighbors that share at least Y urls with k1
+// For each k2, find k3: nodes that are both k2's and k1's neighbors, and share at least Y of the same urls with both k2, and k1. Note that the set of k3's is a subset of the set of k2's.
+// For each k3: find k4: nodes that both k3's and k2's and k1's neighbors, and share at least Y of the same urls with both k3, k2, and k1. Note that the set of k4's is a subset of the set of k3's.
+
+MATCH (k1:Keyword {id: 7442})-[r1:ASSOCIATED_WITH]-(k2:Keyword)
+WHERE size(r1.urls) > 4
+WITH *
+MATCH (k2)-[r2:ASSOCIATED_WITH]-(k3)
+WHERE NOT k3 in [k1,k2] AND exists((k3)-[:ASSOCIATED_WITH]-(k1))
+WITH k1,k2,k3,reduce(intersect = r1.urls, r IN [r1, r2] | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+RETURN [k in [k1, k2, k3] | k.keyword], commonUrls
+
+MATCH (k1:Keyword {id: 7442})-[r1:ASSOCIATED_WITH]-(k2:Keyword)
+WHERE size(r1.urls) > 4
+WITH *
+MATCH (k2)-[r2:ASSOCIATED_WITH]-(k3)
+WHERE NOT k3 IN [k1,k2]
+WITH *,reduce(intersect = r1.urls, r IN [r1, r2] | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+MATCH (k3)-[r3:ASSOCIATED_WITH]-(k4)
+WHERE NOT k4 IN [k1,k2,k3]
+WITH *,reduce(intersect = r1.urls, r IN [r1, r2, r3] | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+RETURN [k in [k1, k2, k3, k4] | k.keyword], commonUrls
+
+MATCH (k1:Keyword {id: 7442})-[r1:ASSOCIATED_WITH]-(k2:Keyword)
+WHERE size(r1.urls) > 4
+WITH *
+MATCH (k2)-[r2:ASSOCIATED_WITH]-(k3)
+WHERE NOT k3 IN [k1,k2]
+WITH *,reduce(intersect = r1.urls, r IN [r1, r2] | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+MATCH (k3)-[r3:ASSOCIATED_WITH]-(k4)
+WHERE NOT k4 IN [k1,k2,k3]
+WITH *,reduce(intersect = r1.urls, r IN [r1, r2, r3] | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+MATCH (k4)-[r4:ASSOCIATED_WITH]-(k5)
+WHERE NOT k5 IN [k1,k2,k3,k4]
+WITH *,reduce(intersect = r1.urls, r IN [r1, r2, r3, r4] | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+RETURN [k in [k1, k2, k3, k4, k5] | k.keyword], commonUrls
+
+
+// find groups of three or more keywords that have more than 4 urls in common,
+// such that any keyword appears only in the largest group it can appear in
+// this is equivalent to finding the longest path where all relationships contain 4 or more of the same urls
+
+https://community.neo4j.com/t/find-longest-non-repeating-roadtrip-path-given-distance-budget/14794/8
+https://neo4j.com/developer/kb/achieving-longestpath-using-cypher/
+https://neo4j.com/labs/apoc/4.1/graph-querying/expand-paths-config/	
+
+// could create a "marked" property for each keyword on a matched path
+// and avoid matching paths that contain "marked" keywords
+// but this doesn't guarantee longest paths
+
+// might do something like:
+// find longest path for first keyword
+// mark all keywords on the path
+// for keyword in rest of keywords
+// if keyword is marked, skip
+// else find longest path
+
+MATCH path = (k1:Keyword)-[r1:ASSOCIATED_WITH]-(k2:Keyword)-[:ASSOCIATED_WITH*1..2]-(k3:Keyword)
+WHERE k1.id = 7442
+WITH nodes(path) as keywords, reduce(intersect = r1.urls, r IN relationships(path) | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4 AND id(k1) <> id(k3)
+RETURN keywords, commonUrls ORDER BY size(keywords) DESC LIMIT 1
+
+
+// Create graphs of nodes k2 that are neighbors of k1
+// and relationships between k2 and k2'
+
+CALL gds.graph.create.cypher(
+    'neighborhood',
+    'MATCH (k1:Keyword {id: 7442})-[:ASSOCIATED_WITH*0..1]-(n:Keyword) RETURN id(n) as id',
+    'MATCH (n:Keyword)-[:ASSOCIATED_WITH]-(m:Keyword) WHERE exists()'
+
+
+MATCH (k1:Keyword {id: 7442})
+CALL apoc.neighbors.athop(k1, "ASSOCIATED_WITH", 1)
+YIELD node
+RETURN node
+
+
+CALL apoc.periodic.iterate(
+"MATCH (k1:Keyword) WHERE k1.id = 7442 return k1",
+"MATCH path = (k1)-[r1:ASSOCIATED_WITH]-(k2:Keyword)-[:ASSOCIATED_WITH*1..3]-(k3:Keyword)
+WITH k1,nodes(path) as keywords, reduce(intersect = r1.urls, r IN relationships(path) | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE ALL(k in path WHERE (k1)-[:ASSOCIATED_WITH]-(k)) AND size(commonUrls) > 4
+RETURN k1,keywords, commonUrls ORDER BY size(keywords) DESC LIMIT 1 SET k1.longestPathSize=size(keywords), k1.pathKeywords=keywords",{parallel:true,batchSize:10})
+
+// All groups necessarily consist of neighbors of first keyword
+
+MATCH (k1:Keyword {id: 7442})
+CALL apoc.neighbors.athop(k1, "ASSOCIATED_WITH", 1)
+YIELD node
+WITH collect(node) as neighbors
+MATCH path = (k1)-[r1:ASSOCIATED_WITH]-(k2:Keyword)-[:ASSOCIATED_WITH*1..2]-(k3:Keyword)
+WHERE ALL(k in nodes(path) WHERE k in neighbors)
+WITH k1,nodes(path) as keywords, reduce(intersect = r1.urls, r IN relationships(path) | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+RETURN k1,keywords, commonUrls ORDER BY size(keywords) DESC
+
+
+MATCH path = (k1)-[r1:ASSOCIATED_WITH]-(k2:Keyword)-[:ASSOCIATED_WITH*1..2]-(k3:Keyword)
+WHERE  k1.id = 7442 AND ALL(k in nodes(path) WHERE (k1)-[:ASSOCIATED_WITH]-(k))
+WITH k1,nodes(path) as keywords, reduce(intersect = r1.urls, r IN relationships(path) | apoc.coll.intersection(intersect, r.urls)) AS commonUrls
+WHERE size(commonUrls) > 4
+RETURN k1,keywords, commonUrls ORDER BY size(keywords) DESC
+
+// Bron-Kerbosch algorithm https://gist.github.com/abhin4v/8304062
+
+MATCH (k1:Keyword {id: 7442})
+CALL apoc.path.expandConfig(k1, {
+    relationshipFilter: "ASSOCIATED_WITH",
+    minLevel: 1,
+    uniqueness: "NODE_GLOBAL"
+})
+YIELD path
+RETURN [node in nodes(path) | node.name] AS nodes, length(path) AS hops
+
+
+
+CALL gds.louvain.stream(
+  'keyword_association',
+  {relationshipWeightProperty:'weight'}
+)
+YIELD nodeId, communityId, intermediateCommunityIds
+WITH communityId, intermediateCommunityIds, COUNT(nodeId) AS cnt, COLLECT(gds.util.asNode(nodeId).keyword) AS keywords //assuming keyword is the property that holds the actual keyword
+WHERE cnt > 1 //in case you want to filter out communities with one member alone
+RETURN communityId, cnt, keywords
+ORDER BY cnt DESC 
+LIMIT 10 //limiting results
