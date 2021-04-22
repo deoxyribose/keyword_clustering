@@ -1,32 +1,21 @@
-from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
-from pyspark.ml.feature import CountVectorizer
-from pyspark.sql.functions import udf
-from pyspark.ml.linalg import SparseVector, Vectors, VectorUDT
-from pyspark.sql.types import ArrayType, IntegerType
+import pandas as pd
 
-spark = SparkSession \
-    .builder \
-    .appName("Keyword clustering") \
-    .getOrCreate()
+data = pd.read_csv('./search_results.csv', header=0)
+data = data.drop(['Title', '_id'], axis= 1)
 
-sc = spark.sparkContext
+data['keyword_id'] = data.groupby('Keyword').ngroup()
+data['url_id'] = data.groupby('Url').ngroup()
+data = data.drop_duplicates()
 
-df = spark.read.csv('./search_results.csv', header=True)
+keywords = data[['keyword_id', 'Keyword']]
+keywords = keywords.drop_duplicates()
 
-df = df.drop('Title', '_id')
+urls = data[['url_id', 'Url']]
+urls = urls.drop_duplicates()
 
-keyword2url = df.groupBy('Keyword') \
-  .agg(F.collect_list('url').alias('urlIndex'))
+url2keyword = data[['url_id', 'keyword_id']]
+url2keyword = url2keyword.drop_duplicates()
 
-df3 = keyword2url.withColumn("k_id", F.monotonically_increasing_id())
-df3.createOrReplaceTempView('df3')
-df3 = spark.sql('select row_number() over (order by "k_id") as Keyword_id, * from df3').drop('k_id')
-
-
-df4 = df3.withColumn("Url", F.explode(df3.urlIndex)) \
-      .drop("urlIndex")
-
-keyword_ids = df3.select('Keyword_id', 'Keyword')
-keyword_ids.coalesce(1).write.csv('keywords.csv')
-
+keywords.to_csv('keywords.csv', sep=',', index=False, header=['id', 'keyword'])
+urls.to_csv('urls.csv', sep=',', index=False, header=['id', 'url'])
+url2keyword.to_csv('url2keyword.csv', sep=',', index=False, header=['urlId', 'keywordId'])
