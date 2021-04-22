@@ -22,6 +22,7 @@ keyword2, url2
 # How to run
 
 run "sh install_neo4j.sh"
+
 run "sh create_database.sh"
 
 To cluster an input search query run
