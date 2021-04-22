@@ -9,6 +9,7 @@ As the result, all keywords within a group will be related to each other by havi
 # Input data format
 
 A csv file containing
+
 keyword1, url1
 
 keyword1, url2
@@ -30,6 +31,7 @@ where 3 is the grouping level, and 4 is the minimum number of matching URLs.
 To cluster all keywords, run
 "python find_all_groups.py -k 3 -u 4"
 This creates a csv file output.csv, formatted as
+
 keyword1 supporting_keyword1,supporting_keyword2,...
 
 keyword2 supporting_keyword3,supporting_keyword4,...
